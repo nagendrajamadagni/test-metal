@@ -49,21 +49,28 @@ int main() {
     // Create an auto release pool for memory management as garbage collection
     // is disabled
 
-    NS::AutoreleasePool *pool =
-        NS::AutoreleasePool::alloc()
-            ->init(); // I own the auto-release pool now.
+    NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
 
     if (!pool) {
         std::cerr << "Failed to create an auto release pool!" << std::endl;
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
 
     // Get the default GPU device
-    auto *device =
-        MTL::CreateSystemDefaultDevice(); // I own the device object now
+    auto *device = MTL::CreateSystemDefaultDevice();
 
     if (!device) {
         std::cerr << "Failed to create a metal device!" << std::endl;
         pool->release();
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
 
     // Create buffers on the device, similar to cudaMalloc with cudaMemcpy
@@ -74,6 +81,11 @@ int main() {
         std::cerr << "Failed to create a buffer!" << std::endl;
         device->release();
         pool->release();
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
 
     auto *bufB = device->newBuffer(B, sizeof(float) * NROWS * NCOLS,
@@ -84,6 +96,11 @@ int main() {
         bufA->release();
         device->release();
         pool->release();
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
 
     auto *bufC = device->newBuffer(sizeof(float) * NROWS * NCOLS,
@@ -95,6 +112,11 @@ int main() {
         bufB->release();
         device->release();
         pool->release();
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
 
     uint32_t nrows = NROWS;
@@ -109,9 +131,12 @@ int main() {
         bufC->release();
         device->release();
         pool->release();
+        free(A);
+        free(B);
+        free(C);
+        free(d_C);
+        return -1;
     }
-
-    // I own all these buffers and I need to de-allocate them now
 
     bufA->didModifyRange(NS::Range::Make(0, sizeof(float) * NROWS * NCOLS));
     bufB->didModifyRange(NS::Range::Make(0, sizeof(float) * NROWS * NCOLS));
@@ -126,8 +151,6 @@ int main() {
                                     NS::UTF8StringEncoding);
 
     lib = device->newLibrary(path, &error);
-
-    // I own the lib function
 
     if (!lib) {
         std::cerr << "Failed to load Metal library";
@@ -157,8 +180,6 @@ int main() {
 
     auto *fn = lib->newFunction(functionName);
 
-    // I own the fn pointer
-
     if (!fn) {
         std::cerr
             << "Failed to find function 'device_matrix_multiply' in library"
@@ -181,8 +202,6 @@ int main() {
     // Create a compute pipeline
 
     auto *pipeline = device->newComputePipelineState(fn, &error);
-
-    // I own the pipeline object now
 
     if (!pipeline) {
         std::cerr << "Failed to create compute pipeline state";
@@ -231,8 +250,6 @@ int main() {
 
     auto *cmdBuf = queue->commandBuffer();
     auto *enc = cmdBuf->computeCommandEncoder();
-
-    // I only own the queue object here
 
     enc->setComputePipelineState(pipeline);
     enc->setBuffer(bufA, 0, 0);
