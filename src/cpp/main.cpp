@@ -9,8 +9,8 @@
 
 #include <Metal/Metal.hpp>
 
-#define NROWS 1000
-#define NCOLS 1000
+#define NROWS 32
+#define NCOLS 32
 
 // Multiply 2 square matrices and get the result
 void host_square_matmul(float *mat1, float *mat2, float *result, int width) {
