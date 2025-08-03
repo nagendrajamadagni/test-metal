@@ -1,325 +1,145 @@
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
 
-#include <assert.h>
-#include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <util.h>
-
+// #include "Foundation/NSString.hpp"
+#include <Foundation/Foundation.hpp>
 #include <Metal/Metal.hpp>
+#include <iostream>
+#include <util.h>
 
 #define NROWS 32
 #define NCOLS 32
 
-// Multiply 2 square matrices and get the result
-void host_square_matmul(float *mat1, float *mat2, float *result, int width) {
-    for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < width; ++j) {
+void host_matrix_multiply(float *matA, float *matB, float *matC, int nrows,
+                          int ncols) {
+    for (int i = 0; i < nrows; ++i) {
+        for (int j = 0; j < ncols; ++j) {
             float sum = 0;
-            for (int k = 0; k < width; ++k) {
-                float num1 = mat1[i * width + k];
-                float num2 = mat2[k * width + j];
-                sum += num1 * num2;
+            for (int k = 0; k < nrows; ++k) {
+                sum += matA[i * nrows + k] * matB[k * ncols + j];
             }
-            int idx = i * width + j;
-            result[idx] = sum;
+            matC[i * nrows + j] = sum;
         }
     }
 }
 
+class GPUMatrixMultiplier {
+  private:
+    NS::SharedPtr<MTL::Device> m_device;
+    NS::SharedPtr<MTL::CommandQueue> m_queue;
+    NS::SharedPtr<MTL::Library> m_lib;
+    NS::SharedPtr<MTL::Function> m_fn;
+    NS::SharedPtr<MTL::ComputePipelineState> m_pipeline;
+
+  public:
+    GPUMatrixMultiplier(const char *lib, const char *func) {
+        NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
+        m_device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
+        m_queue = NS::TransferPtr(m_device->newCommandQueue());
+
+        NS::Error *error = nullptr;
+        auto *library = NS::String::string(lib, NS::UTF8StringEncoding);
+        m_lib = NS::TransferPtr(m_device->newLibrary(library, &error));
+
+        if (!m_lib) {
+            std::cerr << "Failed to create library "
+                      << error->localizedDescription()->utf8String()
+                      << std::endl;
+            pool->release();
+            throw std::runtime_error("Failed to create Metal library");
+        }
+
+        auto *function = NS::String::string(func, NS::UTF8StringEncoding);
+        m_fn = NS::TransferPtr(m_lib->newFunction(function));
+
+        if (!m_fn) {
+            pool->release();
+            throw std::runtime_error("Failed to find function in library");
+        }
+
+        m_pipeline = NS::TransferPtr(
+            m_device->newComputePipelineState(m_fn.get(), &error));
+
+        pool->release();
+    }
+
+    ~GPUMatrixMultiplier() = default;
+
+    void multiplyMatrixGPU(float *matA, float *matB, float *matC) {
+        NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
+
+        size_t matrixSizeBytes = NROWS * NCOLS * sizeof(float);
+
+        uint nrows = NROWS;
+
+        auto bufA = NS::TransferPtr(m_device->newBuffer(
+            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
+        auto bufB = NS::TransferPtr(m_device->newBuffer(
+            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
+        auto bufC = NS::TransferPtr(m_device->newBuffer(
+            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
+        auto bufWidth = NS::TransferPtr(m_device->newBuffer(
+            &nrows, sizeof(uint), MTL::ResourceStorageModeManaged));
+
+        auto commandBuffer = NS::TransferPtr(m_queue->commandBuffer());
+
+        auto encoder = NS::TransferPtr(commandBuffer->computeCommandEncoder());
+
+        encoder->setComputePipelineState(m_pipeline.get());
+        encoder->setBuffer(bufA.get(), 0, 0);
+        encoder->setBuffer(bufB.get(), 0, 1);
+        encoder->setBuffer(bufC.get(), 0, 2);
+        encoder->setBuffer(bufWidth.get(), 0, 3);
+
+        MTL::Size grid(NROWS, NCOLS, 1);
+        MTL::Size threadsPerThreadgroup(NROWS, NCOLS,
+                                        1); // Better threadgroup size
+
+        encoder->dispatchThreads(grid, threadsPerThreadgroup);
+        encoder->endEncoding();
+
+        commandBuffer->commit();
+        commandBuffer->waitUntilCompleted();
+
+        // Check for command buffer errors
+        if (commandBuffer->status() == MTL::CommandBufferStatusError) {
+            std::cerr << "Command buffer execution failed" << std::endl;
+            if (commandBuffer->error()) {
+                std::cerr << "Error: "
+                          << commandBuffer->error()
+                                 ->localizedDescription()
+                                 ->utf8String()
+                          << std::endl;
+            }
+        }
+
+        memcpy(matC, bufC.get()->contents(), sizeof(float) * NROWS * NCOLS);
+    }
+};
+
 int main() {
-    static_assert(NROWS == NCOLS,
-                  "The matrix dimensions do not form a square matrix!");
-    float *A = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    float *B = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    float *C = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-
-    float *d_C = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    populate_matrix(A, NROWS, NCOLS);
-    populate_matrix(B, NROWS, NCOLS);
-
-    auto start = std::chrono::high_resolution_clock::now();
-    host_square_matmul(A, B, C, NROWS);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    auto host_delta =
-        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-
-    // Create an auto release pool for memory management as garbage collection
-    // is disabled
-
     NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
 
-    if (!pool) {
-        std::cerr << "Failed to create an auto release pool!" << std::endl;
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
+    float *matA = (float *)malloc(sizeof(float) * NROWS * NCOLS);
+    float *matB = (float *)malloc(sizeof(float) * NROWS * NCOLS);
+    float *matC = (float *)malloc(sizeof(float) * NROWS * NCOLS);
+    float *matH = (float *)malloc(sizeof(float) * NROWS * NCOLS);
 
-    // Get the default GPU device
-    auto *device = MTL::CreateSystemDefaultDevice();
+    populate_matrix(matA, NROWS, NCOLS);
+    populate_matrix(matB, NROWS, NCOLS);
 
-    if (!device) {
-        std::cerr << "Failed to create a metal device!" << std::endl;
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
+    GPUMatrixMultiplier multiplier("build/matmul_kernel.metallib",
+                                   "device_matrix_multiply");
 
-    // Create buffers on the device, similar to cudaMalloc with cudaMemcpy
-    auto *bufA = device->newBuffer(A, sizeof(float) * NROWS * NCOLS,
-                                   MTL::ResourceStorageModeManaged);
+    multiplier.multiplyMatrixGPU(matA, matB, matC);
 
-    if (!bufA) {
-        std::cerr << "Failed to create a buffer!" << std::endl;
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
+    host_matrix_multiply(matA, matB, matH, NROWS, NCOLS);
 
-    auto *bufB = device->newBuffer(B, sizeof(float) * NROWS * NCOLS,
-                                   MTL::ResourceStorageModeManaged);
-
-    if (!bufB) {
-        std::cerr << "Failed to create a buffer!" << std::endl;
-        bufA->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    auto *bufC = device->newBuffer(sizeof(float) * NROWS * NCOLS,
-                                   MTL::ResourceStorageModeManaged);
-
-    if (!bufC) {
-        std::cerr << "Failed to create a buffer!" << std::endl;
-        bufA->release();
-        bufB->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    uint32_t nrows = NROWS;
-
-    auto *bufWidth = device->newBuffer(&nrows, sizeof(uint32_t),
-                                       MTL::ResourceStorageModeManaged);
-
-    if (!bufWidth) {
-        std::cerr << "Failed to create a buffer!" << std::endl;
-        bufA->release();
-        bufB->release();
-        bufC->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    bufA->didModifyRange(NS::Range::Make(0, sizeof(float) * NROWS * NCOLS));
-    bufB->didModifyRange(NS::Range::Make(0, sizeof(float) * NROWS * NCOLS));
-    bufWidth->didModifyRange(NS::Range::Make(0, sizeof(uint32_t)));
-
-    NS::Error *error = nullptr;
-    MTL::Library *lib = nullptr;
-
-    // Find the library
-
-    auto *path = NS::String::string("build/matmul_kernel.metallib",
-                                    NS::UTF8StringEncoding);
-
-    lib = device->newLibrary(path, &error);
-
-    if (!lib) {
-        std::cerr << "Failed to load Metal library";
-
-        if (error) {
-            std::cerr << ": " << error->localizedDescription()->utf8String();
-        }
-        std::cerr << std::endl;
-
-        bufA->release();
-        bufB->release();
-        bufC->release();
-        bufWidth->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    // Find the function inside the library
-
-    auto *functionName =
-        NS::String::string("device_matrix_multiply", NS::UTF8StringEncoding);
-
-    auto *fn = lib->newFunction(functionName);
-
-    if (!fn) {
-        std::cerr
-            << "Failed to find function 'device_matrix_multiply' in library"
-            << std::endl;
-
-        lib->release();
-        bufA->release();
-        bufB->release();
-        bufC->release();
-        bufWidth->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    // Create a compute pipeline
-
-    auto *pipeline = device->newComputePipelineState(fn, &error);
-
-    if (!pipeline) {
-        std::cerr << "Failed to create compute pipeline state";
-
-        if (error) {
-            std::cerr << ": " << error->localizedDescription()->utf8String();
-        }
-
-        std::cerr << std::endl;
-        fn->release();
-        lib->release();
-        bufA->release();
-        bufB->release();
-        bufC->release();
-        bufWidth->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    // Encode the commands and dispatch
-
-    auto *queue = device->newCommandQueue();
-
-    if (!queue) {
-        std::cerr << "Failed to create a command queue!";
-
-        fn->release();
-        lib->release();
-        bufA->release();
-        bufB->release();
-        bufC->release();
-        bufWidth->release();
-        device->release();
-        pool->release();
-        free(A);
-        free(B);
-        free(C);
-        free(d_C);
-        return -1;
-    }
-
-    auto *cmdBuf = queue->commandBuffer();
-    auto *enc = cmdBuf->computeCommandEncoder();
-
-    enc->setComputePipelineState(pipeline);
-    enc->setBuffer(bufA, 0, 0);
-    enc->setBuffer(bufB, 0, 1);
-    enc->setBuffer(bufC, 0, 2);
-    enc->setBuffer(bufWidth, 0, 3);
-
-    // Configure the threads and thread groups manually
-
-    MTL::Size threadsPerThreadGroup = MTL::Size::Make(NROWS, NCOLS, 1);
-    MTL::Size numThreadGroups = MTL::Size::Make(1, 1, 1);
-
-    start = std::chrono::high_resolution_clock::now();
-
-    enc->dispatchThreadgroups(numThreadGroups, threadsPerThreadGroup);
-
-    enc->endEncoding();
-
-    cmdBuf->commit();
-
-    cmdBuf->waitUntilCompleted();
-
-    end = std::chrono::high_resolution_clock::now();
-
-    auto device_delta =
-        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-
-    if (cmdBuf->status() == MTL::CommandBufferStatusError) {
-        std::cerr << "Command buffer execution failed" << std::endl;
-
-        if (cmdBuf->error()) {
-            std::cerr << "Error: "
-                      << cmdBuf->error()->localizedDescription()->utf8String()
-                      << std::endl;
-        }
-    }
-
-    if (cmdBuf->status() == MTL::CommandBufferStatusCompleted) {
-        memcpy(d_C, bufC->contents(), sizeof(float) * NROWS * NCOLS);
-    }
-
-    if (!compare_matrices(C, d_C, NROWS, NCOLS)) {
-        std::cerr << "Device matrix multiplication result does not match host "
-                     "matrix multiplication result!"
-                  << std::endl;
+    if (compare_matrices(matC, matH, NROWS, NCOLS)) {
+        std::cout << "Matrix multiplication matches" << std::endl;
     } else {
-        std::cout << "Device matrix multiplication and host matrix "
-                     "multiplication results are equal!"
-                  << std::endl;
+        std::cout << "Matrix multiplication does not match" << std::endl;
     }
-
-    std::cout
-        << "The time taken to perform matrix multiplication on the host is "
-        << host_delta.count()
-        << " and the time taken to perform the same operation on the device is "
-        << device_delta.count() << std::endl;
-
-    bufA->release();
-    bufB->release();
-    bufC->release();
-    pipeline->release();
-    fn->release();
-    lib->release();
-    queue->release();
-    device->release();
-    pool->release();
-    free(A);
-    free(B);
-    free(C);
-    free(d_C);
 
     return 0;
 }
