@@ -45,6 +45,8 @@ class GPUMatrixMultiplier {
     NS::SharedPtr<MTL::Library> m_lib;
     NS::SharedPtr<MTL::Function> m_fn;
     NS::SharedPtr<MTL::ComputePipelineState> m_pipeline;
+    MTL::CommandBuffer *m_command_buffer;
+    MTL::ComputeCommandEncoder *m_encoder;
 
   public:
     GPUMatrixMultiplier(const char *lib, const char *func) {
@@ -90,39 +92,45 @@ class GPUMatrixMultiplier {
         auto bufWidth = NS::TransferPtr(m_device->newBuffer(
             &nrows, sizeof(uint), MTL::ResourceStorageModeManaged));
 
-        auto commandBuffer = m_queue->commandBuffer();
+        m_command_buffer = m_queue->commandBuffer();
 
-        auto encoder = commandBuffer->computeCommandEncoder();
+        m_encoder = m_command_buffer->computeCommandEncoder();
 
-        encoder->setComputePipelineState(m_pipeline.get());
-        encoder->setBuffer(bufA.get(), 0, 0);
-        encoder->setBuffer(bufB.get(), 0, 1);
-        encoder->setBuffer(bufC.get(), 0, 2);
-        encoder->setBuffer(bufWidth.get(), 0, 3);
+        m_encoder->setComputePipelineState(m_pipeline.get());
+        m_encoder->setBuffer(bufA.get(), 0, 0);
+        m_encoder->setBuffer(bufB.get(), 0, 1);
+        m_encoder->setBuffer(bufC.get(), 0, 2);
+        m_encoder->setBuffer(bufWidth.get(), 0, 3);
 
         MTL::Size grid(NROWS, NCOLS, 1);
         MTL::Size threadsPerThreadgroup(NROWS, NCOLS,
                                         1); // Better threadgroup size
 
-        encoder->dispatchThreads(grid, threadsPerThreadgroup);
-        encoder->endEncoding();
+        m_encoder->dispatchThreads(grid, threadsPerThreadgroup);
+        m_encoder->endEncoding();
 
-        commandBuffer->commit();
-        commandBuffer->waitUntilCompleted();
+        runKernel();
+
+        memcpy(matC, bufC.get()->contents(), sizeof(float) * NROWS * NCOLS);
+    }
+
+    bool runKernel() {
+        m_command_buffer->commit();
+        m_command_buffer->waitUntilCompleted();
 
         // Check for command buffer errors
-        if (commandBuffer->status() == MTL::CommandBufferStatusError) {
+        if (m_command_buffer->status() == MTL::CommandBufferStatusError) {
             std::cerr << "Command buffer execution failed" << std::endl;
-            if (commandBuffer->error()) {
+            if (m_command_buffer->error()) {
                 std::cerr << "Error: "
-                          << commandBuffer->error()
+                          << m_command_buffer->error()
                                  ->localizedDescription()
                                  ->utf8String()
                           << std::endl;
             }
+            return false;
         }
-
-        memcpy(matC, bufC.get()->contents(), sizeof(float) * NROWS * NCOLS);
+        return true;
     }
 };
 
@@ -151,19 +159,6 @@ int main() {
                      "does not match"
                   << std::endl;
     }
-
-    print_matrix(matA, NROWS, NCOLS);
-
-    std::cout << "***************" << std::endl;
-
-    print_matrix(matB, NROWS, NCOLS);
-
-    std::cout << "***************" << std::endl;
-
-    print_matrix(matC, NROWS, NCOLS);
-
-    std::cout << "***************" << std::endl;
-    print_matrix(matH, NROWS, NCOLS);
 
     free(matA);
     free(matB);
