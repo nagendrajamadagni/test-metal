@@ -7,4 +7,6 @@ void populate_matrix(float *matrix, int nrows, int ncols);
 
 bool compare_matrices(float *mat1, float *mat2, int nrows, int ncols);
 
+void populate_standard_matrix(float *matrix);
+
 #endif

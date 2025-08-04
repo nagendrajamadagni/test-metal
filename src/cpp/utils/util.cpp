@@ -44,3 +44,15 @@ bool compare_matrices(float *mat1, float *mat2, int nrows, int ncols) {
     }
     return true;
 }
+
+void populate_standard_matrix(float *matrix) {
+    matrix[0] = 1;
+    matrix[1] = 1;
+    matrix[2] = 1;
+    matrix[3] = 2;
+    matrix[4] = 2;
+    matrix[5] = 2;
+    matrix[6] = 3;
+    matrix[7] = 3;
+    matrix[8] = 3;
+}

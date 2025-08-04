@@ -1,14 +1,13 @@
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
 
-// #include "Foundation/NSString.hpp"
 #include <Foundation/Foundation.hpp>
 #include <Metal/Metal.hpp>
 #include <iostream>
 #include <util.h>
 
-#define NROWS 32
-#define NCOLS 32
+#define NROWS 3
+#define NCOLS 3
 
 void host_matrix_multiply(float *matA, float *matB, float *matC, int nrows,
                           int ncols) {
@@ -23,6 +22,22 @@ void host_matrix_multiply(float *matA, float *matB, float *matC, int nrows,
     }
 }
 
+class AutoreleasePoolGuard {
+  private:
+    NS::AutoreleasePool *pool;
+
+  public:
+    AutoreleasePoolGuard() : pool(NS::AutoreleasePool::alloc()->init()) {}
+    ~AutoreleasePoolGuard() {
+        if (pool) {
+            pool->release();
+        }
+    }
+    // Prevent copying of autorelease pools
+    AutoreleasePoolGuard(const AutoreleasePoolGuard &) = delete;
+    AutoreleasePoolGuard &operator=(const AutoreleasePoolGuard &) = delete;
+};
+
 class GPUMatrixMultiplier {
   private:
     NS::SharedPtr<MTL::Device> m_device;
@@ -33,7 +48,6 @@ class GPUMatrixMultiplier {
 
   public:
     GPUMatrixMultiplier(const char *lib, const char *func) {
-        NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
         m_device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
         m_queue = NS::TransferPtr(m_device->newCommandQueue());
 
@@ -45,7 +59,6 @@ class GPUMatrixMultiplier {
             std::cerr << "Failed to create library "
                       << error->localizedDescription()->utf8String()
                       << std::endl;
-            pool->release();
             throw std::runtime_error("Failed to create Metal library");
         }
 
@@ -53,20 +66,16 @@ class GPUMatrixMultiplier {
         m_fn = NS::TransferPtr(m_lib->newFunction(function));
 
         if (!m_fn) {
-            pool->release();
             throw std::runtime_error("Failed to find function in library");
         }
 
         m_pipeline = NS::TransferPtr(
             m_device->newComputePipelineState(m_fn.get(), &error));
-
-        pool->release();
     }
 
     ~GPUMatrixMultiplier() = default;
 
     void multiplyMatrixGPU(float *matA, float *matB, float *matC) {
-        NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
 
         size_t matrixSizeBytes = NROWS * NCOLS * sizeof(float);
 
@@ -75,15 +84,15 @@ class GPUMatrixMultiplier {
         auto bufA = NS::TransferPtr(m_device->newBuffer(
             matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
         auto bufB = NS::TransferPtr(m_device->newBuffer(
-            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
+            matB, matrixSizeBytes, MTL::ResourceStorageModeManaged));
         auto bufC = NS::TransferPtr(m_device->newBuffer(
-            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
+            matC, matrixSizeBytes, MTL::ResourceStorageModeManaged));
         auto bufWidth = NS::TransferPtr(m_device->newBuffer(
             &nrows, sizeof(uint), MTL::ResourceStorageModeManaged));
 
-        auto commandBuffer = NS::TransferPtr(m_queue->commandBuffer());
+        auto commandBuffer = m_queue->commandBuffer();
 
-        auto encoder = NS::TransferPtr(commandBuffer->computeCommandEncoder());
+        auto encoder = commandBuffer->computeCommandEncoder();
 
         encoder->setComputePipelineState(m_pipeline.get());
         encoder->setBuffer(bufA.get(), 0, 0);
@@ -118,7 +127,7 @@ class GPUMatrixMultiplier {
 };
 
 int main() {
-    NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
+    AutoreleasePoolGuard guard;
 
     float *matA = (float *)malloc(sizeof(float) * NROWS * NCOLS);
     float *matB = (float *)malloc(sizeof(float) * NROWS * NCOLS);
@@ -138,8 +147,28 @@ int main() {
     if (compare_matrices(matC, matH, NROWS, NCOLS)) {
         std::cout << "Matrix multiplication matches" << std::endl;
     } else {
-        std::cout << "Matrix multiplication does not match" << std::endl;
+        std::cout << "Matrix multiplication "
+                     "does not match"
+                  << std::endl;
     }
+
+    print_matrix(matA, NROWS, NCOLS);
+
+    std::cout << "***************" << std::endl;
+
+    print_matrix(matB, NROWS, NCOLS);
+
+    std::cout << "***************" << std::endl;
+
+    print_matrix(matC, NROWS, NCOLS);
+
+    std::cout << "***************" << std::endl;
+    print_matrix(matH, NROWS, NCOLS);
+
+    free(matA);
+    free(matB);
+    free(matC);
+    free(matH);
 
     return 0;
 }
