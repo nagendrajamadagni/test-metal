@@ -23,7 +23,9 @@ void host_matrix_multiply(float *matA, float *matB, float *matC, int nrows,
 }
 
 int main() {
+
     AutoreleasePoolGuard guard;
+
     uint nrows = NROWS;
 
     std::unique_ptr<float[]> matA = std::make_unique<float[]>(NROWS * NCOLS);
@@ -55,8 +57,6 @@ int main() {
     MetalDim blockDim(NROWS, NCOLS, 1);
 
     multiplier.runKernel(gridDim, blockDim);
-
-    std::cout << "Still no leaks" << std::endl;
 
     std::memcpy(matC.get(), bufC.contents(), sizeof(float) * NROWS * NCOLS);
 

@@ -20,7 +20,7 @@ class MetalContext {
   public:
     MetalContext(const char *lib, const char *func);
 
-    ~MetalContext();
+    ~MetalContext() = default;
 
     void setBuffer(MetalBuffer buffer, NS::UInteger offset,
                    NS::UInteger position);
