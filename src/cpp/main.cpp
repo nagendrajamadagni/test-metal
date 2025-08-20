@@ -1,6 +1,5 @@
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
-
 #include <Metal/AutoreleasePoolGuard.hpp>
 #include <Metal/MetalBuffer.hpp>
 #include <Metal/MetalContext.hpp>
@@ -57,7 +56,11 @@ int main() {
 
     multiplier.runKernel(gridDim, blockDim);
 
+    std::cout << "Still no leaks" << std::endl;
+
     std::memcpy(matC.get(), bufC.contents(), sizeof(float) * NROWS * NCOLS);
+
+    print_matrix(matC.get(), NROWS, NCOLS);
 
     host_matrix_multiply(matA.get(), matB.get(), matH.get(), NROWS, NCOLS);
 

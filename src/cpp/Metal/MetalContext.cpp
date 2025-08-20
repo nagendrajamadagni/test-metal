@@ -1,8 +1,10 @@
+#include <Metal/AutoreleasePoolGuard.hpp>
 #include <Metal/MetalBuffer.hpp>
 #include <Metal/MetalContext.hpp>
 #include <iostream>
 
 MetalContext::MetalContext(const char *lib, const char *func) {
+    std::cout << "Inside the metal context constructor" << std::endl;
     m_device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
     m_queue = NS::TransferPtr(m_device->newCommandQueue());
 
@@ -45,6 +47,7 @@ void MetalContext::setBuffer(MetalBuffer buffer, NS::UInteger offset,
 NS::SharedPtr<MTL::Device> MetalContext::getDevice() { return m_device; }
 
 void MetalContext::runKernel(MetalDim gridDim, MetalDim blockDim) {
+    AutoreleasePoolGuard guard;
     m_encoder->dispatchThreads(gridDim, blockDim);
     m_encoder->endEncoding();
 

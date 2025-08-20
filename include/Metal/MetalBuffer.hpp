@@ -12,7 +12,7 @@ class MetalBuffer {
 
   public:
     MetalBuffer(MetalContext context, size_t buffer_size);
-    ~MetalBuffer() = default;
+    ~MetalBuffer();
     void fillBuffer(void *src, size_t size);
     NS::SharedPtr<MTL::Buffer> getBuffer();
     void *contents();
