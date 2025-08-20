@@ -4,6 +4,7 @@
 #include <iostream>
 
 MetalContext::MetalContext(const char *lib, const char *func) {
+    AutoreleasePoolGuard guard;
     std::cout << "Inside the metal context constructor" << std::endl;
     m_device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
     m_queue = NS::TransferPtr(m_device->newCommandQueue());
@@ -37,14 +38,23 @@ MetalContext::MetalContext(const char *lib, const char *func) {
     m_encoder = m_command_buffer->computeCommandEncoder();
 
     m_encoder->setComputePipelineState(m_pipeline.get());
+
+    m_encoder->retain();
+
+    std::cout << "Exiting the constructor" << std::endl;
 }
 
 void MetalContext::setBuffer(MetalBuffer buffer, NS::UInteger offset,
                              NS::UInteger position) {
+    AutoreleasePoolGuard guard;
     m_encoder->setBuffer(buffer.getBuffer().get(), offset, position);
 }
 
-NS::SharedPtr<MTL::Device> MetalContext::getDevice() { return m_device; }
+NS::SharedPtr<MTL::Device> MetalContext::getDevice() {
+
+    AutoreleasePoolGuard guard;
+    return m_device;
+}
 
 void MetalContext::runKernel(MetalDim gridDim, MetalDim blockDim) {
     AutoreleasePoolGuard guard;
@@ -66,4 +76,6 @@ void MetalContext::runKernel(MetalDim gridDim, MetalDim blockDim) {
         }
         throw std::runtime_error("Failed to run the metal kernel!");
     }
+
+    m_encoder->release();
 }
