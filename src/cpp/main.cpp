@@ -1,10 +1,11 @@
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
 
-#include <Foundation/Foundation.hpp>
-#include <Metal/Metal.hpp>
+#include <Metal/AutoreleasePoolGuard.hpp>
+#include <Metal/MetalBuffer.hpp>
+#include <Metal/MetalContext.hpp>
 #include <iostream>
-#include <util.h>
+#include <utils/util.hpp>
 
 #define NROWS 3
 #define NCOLS 3
@@ -22,148 +23,51 @@ void host_matrix_multiply(float *matA, float *matB, float *matC, int nrows,
     }
 }
 
-class AutoreleasePoolGuard {
-  private:
-    NS::AutoreleasePool *pool;
-
-  public:
-    AutoreleasePoolGuard() : pool(NS::AutoreleasePool::alloc()->init()) {}
-    ~AutoreleasePoolGuard() {
-        if (pool) {
-            pool->release();
-        }
-    }
-    // Prevent copying of autorelease pools
-    AutoreleasePoolGuard(const AutoreleasePoolGuard &) = delete;
-    AutoreleasePoolGuard &operator=(const AutoreleasePoolGuard &) = delete;
-};
-
-class GPUMatrixMultiplier {
-  private:
-    NS::SharedPtr<MTL::Device> m_device;
-    NS::SharedPtr<MTL::CommandQueue> m_queue;
-    NS::SharedPtr<MTL::Library> m_lib;
-    NS::SharedPtr<MTL::Function> m_fn;
-    NS::SharedPtr<MTL::ComputePipelineState> m_pipeline;
-    MTL::CommandBuffer *m_command_buffer;
-    MTL::ComputeCommandEncoder *m_encoder;
-
-  public:
-    GPUMatrixMultiplier(const char *lib, const char *func) {
-        m_device = NS::TransferPtr(MTL::CreateSystemDefaultDevice());
-        m_queue = NS::TransferPtr(m_device->newCommandQueue());
-
-        NS::Error *error = nullptr;
-        auto *library = NS::String::string(lib, NS::UTF8StringEncoding);
-        m_lib = NS::TransferPtr(m_device->newLibrary(library, &error));
-
-        if (!m_lib) {
-            std::cerr << "Failed to create library "
-                      << error->localizedDescription()->utf8String()
-                      << std::endl;
-            throw std::runtime_error("Failed to create Metal library");
-        }
-
-        auto *function = NS::String::string(func, NS::UTF8StringEncoding);
-        m_fn = NS::TransferPtr(m_lib->newFunction(function));
-
-        if (!m_fn) {
-            throw std::runtime_error("Failed to find function in library");
-        }
-
-        m_pipeline = NS::TransferPtr(
-            m_device->newComputePipelineState(m_fn.get(), &error));
-    }
-
-    ~GPUMatrixMultiplier() = default;
-
-    void multiplyMatrixGPU(float *matA, float *matB, float *matC) {
-
-        size_t matrixSizeBytes = NROWS * NCOLS * sizeof(float);
-
-        uint nrows = NROWS;
-
-        auto bufA = NS::TransferPtr(m_device->newBuffer(
-            matA, matrixSizeBytes, MTL::ResourceStorageModeManaged));
-        auto bufB = NS::TransferPtr(m_device->newBuffer(
-            matB, matrixSizeBytes, MTL::ResourceStorageModeManaged));
-        auto bufC = NS::TransferPtr(m_device->newBuffer(
-            matC, matrixSizeBytes, MTL::ResourceStorageModeManaged));
-        auto bufWidth = NS::TransferPtr(m_device->newBuffer(
-            &nrows, sizeof(uint), MTL::ResourceStorageModeManaged));
-
-        m_command_buffer = m_queue->commandBuffer();
-
-        m_encoder = m_command_buffer->computeCommandEncoder();
-
-        m_encoder->setComputePipelineState(m_pipeline.get());
-        m_encoder->setBuffer(bufA.get(), 0, 0);
-        m_encoder->setBuffer(bufB.get(), 0, 1);
-        m_encoder->setBuffer(bufC.get(), 0, 2);
-        m_encoder->setBuffer(bufWidth.get(), 0, 3);
-
-        MTL::Size grid(NROWS, NCOLS, 1);
-        MTL::Size threadsPerThreadgroup(NROWS, NCOLS,
-                                        1); // Better threadgroup size
-
-        m_encoder->dispatchThreads(grid, threadsPerThreadgroup);
-        m_encoder->endEncoding();
-
-        runKernel();
-
-        memcpy(matC, bufC.get()->contents(), sizeof(float) * NROWS * NCOLS);
-    }
-
-    bool runKernel() {
-        m_command_buffer->commit();
-        m_command_buffer->waitUntilCompleted();
-
-        // Check for command buffer errors
-        if (m_command_buffer->status() == MTL::CommandBufferStatusError) {
-            std::cerr << "Command buffer execution failed" << std::endl;
-            if (m_command_buffer->error()) {
-                std::cerr << "Error: "
-                          << m_command_buffer->error()
-                                 ->localizedDescription()
-                                 ->utf8String()
-                          << std::endl;
-            }
-            return false;
-        }
-        return true;
-    }
-};
-
 int main() {
     AutoreleasePoolGuard guard;
+    uint nrows = NROWS;
 
-    float *matA = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    float *matB = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    float *matC = (float *)malloc(sizeof(float) * NROWS * NCOLS);
-    float *matH = (float *)malloc(sizeof(float) * NROWS * NCOLS);
+    std::unique_ptr<float[]> matA = std::make_unique<float[]>(NROWS * NCOLS);
+    auto matB = std::make_unique<float[]>(NROWS * NCOLS);
+    auto matC = std::make_unique<float[]>(NROWS * NCOLS);
+    auto matH = std::make_unique<float[]>(NROWS * NCOLS);
 
-    populate_matrix(matA, NROWS, NCOLS);
-    populate_matrix(matB, NROWS, NCOLS);
+    populate_matrix(matA.get(), NROWS, NCOLS);
+    populate_matrix(matB.get(), NROWS, NCOLS);
 
-    GPUMatrixMultiplier multiplier("build/matmul_kernel.metallib",
-                                   "device_matrix_multiply");
+    MetalContext multiplier("build/matmul_kernel.metallib",
+                            "device_matrix_multiply");
 
-    multiplier.multiplyMatrixGPU(matA, matB, matC);
+    MetalBuffer bufA(multiplier, sizeof(float) * NROWS * NCOLS);
+    MetalBuffer bufB(multiplier, sizeof(float) * NROWS * NCOLS);
+    MetalBuffer bufC(multiplier, sizeof(float) * NROWS * NCOLS);
+    MetalBuffer bufWidth(multiplier, sizeof(uint));
 
-    host_matrix_multiply(matA, matB, matH, NROWS, NCOLS);
+    bufA.fillBuffer(matA.get(), sizeof(float) * NROWS * NCOLS);
+    bufB.fillBuffer(matB.get(), sizeof(float) * NROWS * NCOLS);
+    bufWidth.fillBuffer(&nrows, sizeof(uint));
 
-    if (compare_matrices(matC, matH, NROWS, NCOLS)) {
+    multiplier.setBuffer(bufA, 0, 0);
+    multiplier.setBuffer(bufB, 0, 1);
+    multiplier.setBuffer(bufC, 0, 2);
+    multiplier.setBuffer(bufWidth, 0, 3);
+
+    MetalDim gridDim(NROWS, NCOLS, 1);
+    MetalDim blockDim(NROWS, NCOLS, 1);
+
+    multiplier.runKernel(gridDim, blockDim);
+
+    std::memcpy(matC.get(), bufC.contents(), sizeof(float) * NROWS * NCOLS);
+
+    host_matrix_multiply(matA.get(), matB.get(), matH.get(), NROWS, NCOLS);
+
+    if (compare_matrices(matC.get(), matH.get(), NROWS, NCOLS)) {
         std::cout << "Matrix multiplication matches" << std::endl;
     } else {
         std::cout << "Matrix multiplication "
                      "does not match"
                   << std::endl;
     }
-
-    free(matA);
-    free(matB);
-    free(matC);
-    free(matH);
 
     return 0;
 }

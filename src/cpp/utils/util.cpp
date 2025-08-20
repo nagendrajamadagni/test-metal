@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <util.h>
+#include <utils/util.hpp>
 
 void print_matrix(float *matrix, int nrows, int ncols) {
     if (!matrix)
