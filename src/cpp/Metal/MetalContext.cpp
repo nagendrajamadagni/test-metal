@@ -79,3 +79,8 @@ void MetalContext::runKernel(MetalDim gridDim, MetalDim blockDim) {
 
     m_encoder->release();
 }
+
+MetalContext::~MetalContext() {
+    AutoreleasePoolGuard guard;
+    std::cout << "Destroying the Metal Context" << std::endl;
+}
